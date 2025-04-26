@@ -7,6 +7,7 @@ import os
 import logging
 from typing import Dict, List, Any
 from datetime import datetime
+import json
 
 import pandas as pd
 from openai import OpenAI
@@ -51,6 +52,91 @@ def get_db_config() -> Dict[str, str]:
     
     logger.info(f"Database configuration loaded for {config['dbname']} at {config['host']}")
     return config
+
+def extract_product_metadata(row: pd.Series, client: OpenAI) -> Dict[str, Any]:
+    """
+    Use GPT to extract and infer product metadata from available information.
+    
+    Args:
+        row: DataFrame row containing product information
+        client: OpenAI client instance
+    Returns:
+        Dictionary containing extracted/inferred metadata
+    """
+    # Combine all available product information
+    product_info = []
+    for field in ['title', 'description', 'brand', 'category', 'price']:
+        if pd.notna(row.get(field)) and row.get(field):
+            product_info.append(f"{field}: {row[field]}")
+    
+    product_text = "\n".join(product_info)
+    
+    # Prepare the prompt for GPT
+    prompt = f"""Given the following product information, please analyze and extract:
+1. The most appropriate product category from this exact list (choose exactly one):
+   - Jewelry
+   - Cellphone
+   - Shoes
+   - Computer & Accessories
+   - Camera & Photo
+2. The brand name
+3. Price ONLY if explicitly mentioned in the text (do not estimate or infer prices based on specs)
+
+Product Information:
+{product_text}
+
+Please respond in JSON format with these fields:
+{{
+    "category": "MUST BE ONE OF: Jewelry, Cellphone, Shoes, Computer & Accessories, Camera & Photo",
+    "brand": "extracted or inferred brand name",
+    "price": float or null (ONLY include if price is explicitly mentioned in the text, DO NOT estimate based on specs)
+}}
+
+Rules for categorization:
+- You MUST choose exactly one category from the provided list
+- Choose the most specific and appropriate category
+- Camera accessories should go under "Camera & Photo"
+- Computer peripherals, parts, and accessories go under "Computer & Accessories"
+- If product type is unclear, choose the most likely category based on the information
+
+Rules for price extraction:
+- Only extract prices that are explicitly mentioned
+- If multiple prices are mentioned, use the main/final price
+- Convert any price strings to numbers (e.g., "$1,299.99" -> 1299.99)
+- If no price is explicitly mentioned, return null
+- DO NOT estimate or infer prices based on product specifications
+
+Only respond with the JSON object, no other text."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[
+                {"role": "system", "content": "You are a product data analyst. Extract product metadata from given information. You must categorize products into exactly one of the predefined categories and only extract prices that are explicitly mentioned - never estimate prices based on specs."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1  # Low temperature for more consistent results
+        )
+        
+        # Parse the response
+        metadata = json.loads(response.choices[0].message.content)
+        
+        # Validate category is one of the allowed values
+        allowed_categories = {"Jewelry", "Cellphone", "Shoes", "Computer & Accessories", "Camera & Photo"}
+        if metadata.get("category") not in allowed_categories:
+            logger.warning(f"Invalid category returned: {metadata.get('category')}. Setting to None.")
+            metadata["category"] = None
+            
+        logger.debug(f"Extracted metadata: {metadata}")
+        return metadata
+        
+    except Exception as e:
+        logger.error(f"Error extracting metadata: {str(e)}")
+        return {
+            "category": None,
+            "brand": None,
+            "price": None
+        }
 
 def generate_product_text(row: pd.Series) -> str:
     """
@@ -101,22 +187,43 @@ def process_dataframe(df: pd.DataFrame, client: OpenAI) -> pd.DataFrame:
     total_rows = len(df)
     logger.info(f"Starting to process {total_rows} products")
     
-    # Generate product text
+    # Extract metadata using GPT
+    logger.info("Extracting product metadata using GPT")
+    processed = 0
+    
+    def process_row(row):
+        nonlocal processed
+        metadata = extract_product_metadata(row, client)
+        processed += 1
+        if processed % 10 == 0:
+            logger.info(f"Processed metadata for {processed}/{total_rows} products ({(processed/total_rows)*100:.1f}%)")
+        
+        # Update row with extracted metadata
+        row['category'] = metadata['category'] if metadata['category'] else row.get('category')
+        row['brand'] = metadata['brand'] if metadata['brand'] else row.get('brand')
+        if pd.isna(row.get('price')) and metadata['price']:
+            row['price'] = metadata['price']
+        return row
+    
+    # Apply metadata extraction
+    df = df.apply(process_row, axis=1)
+    logger.info("Completed metadata extraction")
+    
+    # Generate product text and embeddings
     logger.info("Generating product text descriptions")
     df['product_text'] = df.apply(generate_product_text, axis=1)
     
-    # Generate embeddings with progress tracking
     logger.info("Generating embeddings")
     processed = 0
     def get_embedding_with_progress(text: str) -> List[float]:
         nonlocal processed
         embedding = get_embedding(text, client)
         processed += 1
-        if processed % 10 == 0:  # Log every 10 items
+        if processed % 10 == 0:
             logger.info(f"Processed {processed}/{total_rows} embeddings ({(processed/total_rows)*100:.1f}%)")
         return embedding
     
-    df['embedding'] = df['product_text'].apply(get_embedding_with_progress)
+    df['embedding'] = df['product_text'].apply(lambda x: get_embedding_with_progress(x))
     logger.info("Completed generating embeddings")
     
     return df
@@ -192,7 +299,7 @@ def main() -> None:
         # Load and process data
         logger.info("Loading JSON data from cameras-s.json")
         df = pd.read_json('cameras-s.json')
-        df = df.head(10)  # Take only first 100 rows
+        df = df.head(10)  # Take only first 10 rows
         logger.info(f"Loaded {len(df)} products from JSON file")
         
         df = process_dataframe(df, client)
