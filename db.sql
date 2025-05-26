@@ -9,7 +9,7 @@ CREATE TABLE products (
     title TEXT,
     description TEXT,
     price DECIMAL(10, 2),
-    embedding vector(1536), -- Adjust dimension based on your embedding model (1536 for OpenAI, 384 for MiniLM)
+    embedding vector(1536),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
