@@ -1,13 +1,12 @@
 [project]
-name = "intent-based-search"
+name = "semantrix"
 version = "0.1.0"
-description = "Add your description here"
+description = "API for semantic search over product data."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "dotenv>=0.9.9",
     "fastapi>=0.115.12",
-    "openai>=1.82.0",
     "opentelemetry-api>=1.33.1",
     "opentelemetry-exporter-otlp>=1.33.1",
     "opentelemetry-instrumentation-fastapi>=0.54b1",
@@ -18,4 +17,9 @@ dependencies = [
     "prometheus-fastapi-instrumentator>=7.1.0",
     "pydantic>=2.11.5",
     "structlog>=25.3.0",
+    "requests>=2.31.0",
+    "pandas>=2.2.0",
+    "psycopg2-binary>=2.9.9",
+    "uvicorn>=0.30.0",
+    "ipykernel>=7.1.0",
 ]
