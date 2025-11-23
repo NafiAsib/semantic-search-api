@@ -1,8 +1,19 @@
-postgres_data
-venv
+# Environment
 .env
-__pycache__
-.venv
-.DS_Store
-*_data/
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Docker volumes
+volumes/
+
+# Data files
 *.csv
+
+# OS
+.DS_Store

@@ -41,7 +41,7 @@ docker-restart:
 # Create database schema
 db-create:
 	@echo "Creating database schema..."
-	@docker exec -i semantrix psql -U $(DB_USER) -d $(DB_NAME) < db.sql
+	@docker exec -i semantrix psql -U $(DB_USER) -d $(DB_NAME) < db/schema.sql
 	@echo "Database schema created successfully!"
 
 # Create vector index (run after inserting data for better performance)
@@ -90,7 +90,7 @@ clean:
 		echo "Stopping services..."; \
 		docker compose down -v; \
 		echo "Removing local data directories..."; \
-		rm -rf postgres_data; \
+		rm -rf volumes/postgres_data volumes/grafana_data volumes/prometheus_data; \
 		echo "Cleanup complete!"; \
 	else \
 		echo "Operation cancelled."; \

@@ -60,12 +60,12 @@ rm dataset/amazon-best-sellers-product-dataset.zip
 
 7. **Generate embeddings for products**
    ```bash
-   python embedding.py
+   python app/embedding.py
    ```
-> For initial testing, you may want to try out with only 500 products. As generating vector for 24K product will take some time. Uncomment `df = df.head(500)` in main function of `embedding.py`
+> For initial testing, you may want to try out with only 500 products. As generating vector for 24K product will take some time. Uncomment `df = df.head(500)` in main function of `app/embedding.py`
 8. **Start the API**
    ```bash
-   python main.py
+   python app/main.py
    ```
 
 9. **Test the search endpoint**
@@ -130,7 +130,7 @@ HNSW is comparatively faster than IVFFlat.
 
 Visit [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard) and choose one according to your hardware.
 
-> Don't forget to update `EMBEDDING_DIMENSION` in `.env` and `vector(N)` in `db.sql`, then run `make db-reset`.
+> Don't forget to update `EMBEDDING_DIMENSION` in `.env` and `vector(N)` in `db/schema.sql`, then run `make db-reset`.
 
 **Q4. Which LLM should I use?**
 
