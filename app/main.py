@@ -70,6 +70,7 @@ SEARCH_LATENCY = Histogram(
 EMBEDDING_LATENCY = Histogram(
     "embedding_generation_latency_seconds", "Embedding generation latency in seconds"
 )
+RERANKER_LATENCY = Histogram("reranker_latency_seconds", "Reranker latency in seconds")
 DB_QUERY_LATENCY = Histogram(
     "db_query_latency_seconds", "Database query latency in seconds"
 )
@@ -90,6 +91,11 @@ app.add_middleware(
 EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "http://192.168.0.110:8080")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding-8B")
 EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "4096"))
+
+# Reranker API configuration
+RERANKER_API_URL = os.getenv("RERANKER_API_URL", "http://192.168.0.110:8081")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
+RERANKER_CANDIDATES = int(os.getenv("RERANKER_CANDIDATES", "20"))
 
 # Search configuration
 SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "3"))
@@ -116,6 +122,7 @@ class SearchResult(BaseModel):
     price: float | None = None
     image_url: str | None = None
     similarity_score: float
+    rerank_score: float | None = None
 
 
 @EMBEDDING_LATENCY.time()
@@ -162,6 +169,82 @@ def get_embedding(text: str) -> List[float]:
                 "embedding_generation_failed", error=str(e), text_length=len(text)
             )
             raise HTTPException(status_code=500, detail="Failed to generate embedding")
+
+
+@RERANKER_LATENCY.time()
+def rerank_results(
+    query: str, candidates: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Rerank search results using the reranker API."""
+    with tracer.start_as_current_span("rerank_results") as span:
+        span.set_attribute("candidates.count", len(candidates))
+        try:
+            # Prepare documents for reranking
+            documents = []
+            for product in candidates:
+                # Combine product fields into a single text for reranking
+                doc_parts = []
+                if product.get("name"):
+                    doc_parts.append(f"Product: {product['name']}")
+                if product.get("brand"):
+                    doc_parts.append(f"Brand: {product['brand']}")
+                if product.get("description"):
+                    doc_parts.append(f"Description: {product['description']}")
+                documents.append(" ".join(doc_parts))
+
+            # Call reranker API
+            response = requests.post(
+                f"{RERANKER_API_URL}/v1/rerank",
+                json={
+                    "model": RERANKER_MODEL,
+                    "query": query,
+                    "documents": documents,
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Sort candidates by reranker scores
+            results = data.get("results", [])
+            reranked_candidates = []
+            for result in results:
+                idx = result["index"]
+                score = result["relevance_score"]
+                product = candidates[idx].copy()
+                product["rerank_score"] = score
+                reranked_candidates.append(product)
+
+            # Sort by rerank score descending
+            reranked_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+
+            span.set_status(Status(StatusCode.OK))
+            logger.debug(
+                "reranking_completed",
+                candidates_count=len(candidates),
+                reranked_count=len(reranked_candidates),
+            )
+            return reranked_candidates
+
+        except requests.exceptions.RequestException as e:
+            span.set_status(Status(StatusCode.ERROR), str(e))
+            span.record_exception(e)
+            logger.error(
+                "reranker_api_request_failed",
+                error=str(e),
+                candidates_count=len(candidates),
+            )
+            raise HTTPException(
+                status_code=500, detail=f"Failed to rerank results: {str(e)}"
+            )
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR), str(e))
+            span.record_exception(e)
+            logger.error(
+                "reranking_failed", error=str(e), candidates_count=len(candidates)
+            )
+            raise HTTPException(status_code=500, detail="Failed to rerank results")
 
 
 @DB_QUERY_LATENCY.time()
@@ -236,6 +319,7 @@ async def metrics():
 async def search_products(query: SearchQuery, request: Request):
     """
     Search for products similar to the query text.
+    Uses semantic search to retrieve candidates, then reranks them for better relevance.
     Returns top N most similar products (configurable via SEARCH_RESULT_LIMIT env var).
     Returns empty list if no products meet the similarity threshold.
     """
@@ -251,8 +335,24 @@ async def search_products(query: SearchQuery, request: Request):
             query_embedding = get_embedding(query.query)
             log.debug("embedding_generated", embedding_size=len(query_embedding))
 
-            # Search for similar products
-            results = search_similar_products(query_embedding)
+            # Search for similar products (fetch more candidates for reranking)
+            candidates = search_similar_products(
+                query_embedding, limit=RERANKER_CANDIDATES
+            )
+            log.debug(
+                "candidates_retrieved",
+                candidates_count=len(candidates),
+            )
+
+            # Rerank the candidates
+            reranked_results = rerank_results(query.query, candidates)
+            log.debug(
+                "reranking_completed",
+                reranked_count=len(reranked_results),
+            )
+
+            # Return top N results after reranking
+            results = reranked_results[:SEARCH_RESULT_LIMIT]
             log.info(
                 "search_completed",
                 results_count=len(results),

@@ -1,6 +1,8 @@
 # Semantic Search API
 
-A self-hostable semantic search API for products using llama.cpp and pgvector. Features distributed tracing, metrics, and configurable similarity thresholds.
+A self-hostable search API to search products using vector embeddings. 
+
+Features two-stage retrieval (semantic search + reranking), distributed tracing, metrics, and configurable similarity thresholds.
 
 - [Dataset link](https://www.kaggle.com/datasets/nafiasib/amazon-best-sellers-product-dataset)
 
@@ -52,10 +54,13 @@ rm dataset/amazon-best-sellers-product-dataset.zip
    uv sync
    ```
 
-6. **Load your embedding model**
+6. **Load your embedding and reranker models**
    ```bash
-   # Example: Start llama.cpp server with Qwen3-Embedding-0.6B
+   # Start llama.cpp server with Qwen3-Embedding-0.6B on port 8080
    # Make sure it's running at the URL specified in .env (default: http://192.168.0.110:8080)
+   
+   # Start llama.cpp server with Qwen3-Reranker-0.6B on port 8081
+   # Make sure it's running at the URL specified in .env (default: http://192.168.0.110:8081)
    ```
 
 7. **Generate embeddings for products**
@@ -98,19 +103,29 @@ rm dataset/amazon-best-sellers-product-dataset.zip
 ## Configuration
 
 Key environment variables in `.env`:
-- `EMBEDDING_API_URL` - Your llama.cpp server endpoint
+
+**Embedding Configuration:**
+- `EMBEDDING_API_URL` - Your llama.cpp server endpoint (default: http://192.168.0.110:8080)
 - `EMBEDDING_MODEL` - Model name (e.g., Qwen3-Embedding-0.6B)
 - `EMBEDDING_DIMENSION` - Output dimensions (must match db.sql)
+
+**Reranker Configuration:**
+- `RERANKER_API_URL` - Your llama.cpp reranker endpoint (default: http://192.168.0.110:8081)
+- `RERANKER_MODEL` - Reranker model name (default: Qwen/Qwen3-Reranker-0.6B)
+- `RERANKER_CANDIDATES` - Number of candidates to fetch for reranking (default: 20)
+
+**Search Configuration:**
 - `SEARCH_RESULT_LIMIT` - Number of results to return (default: 3)
 - `SEARCH_SIMILARITY_THRESHOLD` - Minimum similarity score (default: 0.5) 
 
 ## Features
 
-- Structured Logging (structlog)
-- Distributed Tracing (OpenTelemetry + Jaeger): 
-   - View in Jaeger UI (http://localhost:16686):
-- Metrics (Prometheus + Grafana)
-   - Prometheus Metrics (http://localhost:9090):
+- **Two-Stage Retrieval**: Semantic search with vector similarity + reranking for improved relevance
+- **Structured Logging** (structlog)
+- **Distributed Tracing** (OpenTelemetry + Jaeger): 
+   - View in Jaeger UI (http://localhost:16686)
+- **Metrics** (Prometheus + Grafana)
+   - Prometheus Metrics (http://localhost:9090)
 
 ## FAQ
 
@@ -132,12 +147,18 @@ Visit [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard) and cho
 
 > Don't forget to update `EMBEDDING_DIMENSION` in `.env` and `vector(N)` in `db/schema.sql`, then run `make db-reset`.
 
-**Q4. Which LLM should I use?**
+**Q4. Why use a reranker?**
 
-Any LLM is fine tbh. Run any smaller ones.
+Reranking significantly improves search quality. The two-stage approach:
+1. **Semantic Search**: Fast vector similarity retrieves 20 candidates
+2. **Reranking**: Qwen3-Reranker-0.6B analyzes query-document pairs for better relevance scoring
 
-**Q5. How can I serve both LLM and embedding model from a single device?**
+This gives you speed (from vector search) + accuracy (from reranking).
 
-You can use [llama-swap](https://github.com/mostlygeek/llama-swap).
+**Q5. Which reranker should I use?**
 
-I run embedding model and LLM separately with `llama.cpp`.
+Qwen3-Reranker-0.6B is a great lightweight option. For other choices, check the [MTEB Retrieval Leaderboard](https://huggingface.co/spaces/mteb/leaderboard). Note: llama.cpp only supports models with reranking capability.
+
+**Q6. Do I need separate servers for embedding and reranking?**
+
+Yes, since llama.cpp runs one model per server. Run them on different ports (8080 for embedding, 8081 for reranker). You can use [llama-swap](https://github.com/mostlygeek/llama-swap) if you want to optimize memory by swapping models dynamically.
